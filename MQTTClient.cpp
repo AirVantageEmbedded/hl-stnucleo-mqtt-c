@@ -72,7 +72,7 @@ bool MQTTClient::isResponseExpected(char* Response, int waitTime)
     
     if(pch != NULL)
     {
-        ret=true;
+        ret = true;
     }  
     
     rx_in = 0;
@@ -89,7 +89,7 @@ bool MQTTClient::getIMEI()
     char*   pchEOC;
     int     length;
     
-    _pc->printf("AT+KGSN=0\r\n");  
+    _pc->printf("AT+KGSN=0\r\n"); 
     
     wait(1);
 
@@ -143,6 +143,56 @@ bool MQTTClient::connectionOK()
     return ret;
 }
 
+bool MQTTClient::configuration()
+{
+    bool    ret = false;
+        
+    rx_in = 0;
+    
+    //Configure the address to be connected + set the APN (HL6 or HL8)    
+    if(HL8 == true)
+    {
+        _pc->printf("AT+KTCPCFG=1,0,\"%s\",%d\r\n",_server,_port); 
+        //wait(1);
+        if(isResponseExpected("ERROR", 1) == true)
+        {
+            reconnect();
+        }
+        //Configure APN for HL8
+        _pc->printf("AT+KCNXCFG=1,\"GPRS\",\"%s\",\"\",\"\",IPV4,\"0.0.0.0\"\r\n",_apn);
+        
+        if(isResponseExpected("ERROR", 1) == true)
+        {
+            reconnect();
+        }
+    }
+    else
+    {    
+
+        _pc->printf("AT+KTCPCFG=0,0,\"%s\",%d\r\n",_server,_port); 
+        
+        if(isResponseExpected("ERROR", 1) == true)
+        {
+            reconnect();
+        }
+
+        //Configure APN for HL6
+
+        _pc->printf("AT+KCNXCFG=0,\"GPRS\",\"%s\",\"\",\"\",\"0.0.0.0\"\r\n",_apn);
+        
+        if(isResponseExpected("ERROR", 1) == true)
+        {
+            reconnect();
+        }
+    }
+    
+    wait(1);
+    
+              
+    return ret;
+
+}
+
 //Check the registration
 bool MQTTClient::isRegistred()
 {
@@ -190,7 +240,7 @@ bool MQTTClient::isSignalEnough()
     if (pch != NULL)
     {
         value = atoi(pch+strlen("+CSQ: "));
-        if(value>=10)
+        if(value>=6)
         {
             signalPower = true;
             return true;
@@ -204,7 +254,7 @@ bool MQTTClient::isSignalEnough()
 //Configure the HL to be ready to send data
 int MQTTClient::init() 
 {
-    bool    ret=false;
+    bool    ret = false;
     
     //Check if the SIM is well inserted
     _pc->printf("AT+CPIN?\r\n");
@@ -244,7 +294,9 @@ int MQTTClient::init()
     
     //The application will not be launched until the HL is not registered to a network  
     do{} while(isRegistred() != true);
-     
+    
+    //configuration();
+    
     //Configure the address to be connected + set the APN (HL6 or HL8)    
     if(HL8 == true)
     {
@@ -270,7 +322,7 @@ int MQTTClient::init()
     
     do
     {
-        ret=connectionOK();
+        ret = connectionOK();
         
         wait(1);  
     }
@@ -446,23 +498,34 @@ void MQTTClient::decodTCPData(int type, int sizeOfData)
         memcpy(msgReceiv, pch, sizeOfData);
         msgReceiv[sizeOfData] = '\0';
                
-
-        if(type == 32)
+        //CONNACK
+        if(type == CONNACK_MSG)
         {
-            _pc->printf("CONNACK with return %d\n\r",msgReceiv[0]); 
-            connected = true; 
+            _pc->printf("CONNACK with return %d\n\r",msgReceiv[1]);//return the error code from the server.
+            
+            if(msgReceiv[1]==0)
+            {
+                connected = true; 
+            }  
+            else
+            {          
+                _pc->printf("Problem with the server\n\r");
+            }
             
         }
-        else if(type == 208)
+        //PINGRESP
+        else if(type == PINGRESP_MSG)
         {
             _pc->printf("PINGRESP\n\r");  
             pingCounter-=1;   
-        } 
-        else if(type == 64)
+        }
+        //PUBACK 
+        else if(type == PUBACK_MSG)
         {
             _pc->printf("PUBACK\n\r");       
         }
-        else if(type==48)
+        //PUBLISH
+        else if(type == PUBLISH_MSG)
         {
             _pc->printf("PUBLISH mesg\n\r"); 
             
@@ -506,7 +569,7 @@ int MQTTClient::recvData()
     pchEOF = strstr(&rx_buffer[0],"--EOF--Pattern--");
     
     //Determine if the message is empty or not. if not we determine the type of message(PUBLISH,CONNACK,PINGRESP)
-    if(pch!=NULL && pchEOF!=NULL)
+    if(pch != NULL && pchEOF != NULL)
     {
         pch = pch+strlen("CONNECT\r\n");
         
@@ -524,13 +587,11 @@ int MQTTClient::recvData()
     //If there is a message
     if(size>0)
     {
-        //If not a PINGRESP message
-        if(type!=208)
+        //If it's not a PINGRESP message
+        if(type != PINGRESP_MSG)
         {
             //Clean the RX buffer
             cleanTCPData(pch,size);
-        
-            _pc->printf("size > 0 \r\n"); 
         
             //reset the RX buffer index
             rx_in=0;
@@ -563,8 +624,6 @@ int MQTTClient::recvData()
                 cleanTCPData(pch,size);
                 
                 size = pchEOF - pch;
-                
-                _pc->printf("size2 = %d\r\n",size);
                   
                 // reset the RX buffer index              
                 rx_in=0;
@@ -650,6 +709,7 @@ bool MQTTClient::isDisconnected()
 void MQTTClient::reconnect() 
 {    
     connected = false; 
+    memset(&rx_buffer[0],0,BUFFER_SIZE);
     init();
 }
 

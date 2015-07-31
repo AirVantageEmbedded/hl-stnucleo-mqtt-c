@@ -13,6 +13,13 @@
 #define PERIOD_PING 15.0
 #define PERIOD_RECEIV 5.0
 
+#define PINGRESP_MSG 208
+#define CONNACK_MSG 32
+#define PUBLISH_MSG 48
+#define PUBACK_MSG 64
+#define PINGRESP_MSG 208
+
+
 class MQTTClient {
     public:
         /** Initialise and launch the MQTT Client
@@ -76,6 +83,7 @@ class MQTTClient {
         bool            getIMEI();
         void            Rx_interrupt();
         bool            connectionOK();
+        bool            configuration();
         int             PublishReq(
                             char* mesgReceiv, 
                             int sizeOfData);

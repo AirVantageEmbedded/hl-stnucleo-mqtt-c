@@ -182,9 +182,9 @@ void callback(const char *key, const char *value)
 
 void startKompel()
 {
-    //dresetKompel = 1;
-    //wait(2);
-    //dresetKompel = 0;
+    /*dresetKompel = 1;
+    wait(2);
+    dresetKompel = 0;*/
     dstartKompel = 1;
     wait(5);
     dstartKompel = 0;       
