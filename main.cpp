@@ -155,41 +155,6 @@ class LightDetector
 
 ModeManager modeManager;
 
-//Callback function that is called when a commend is receied
-void callback(const char *key, const char *value) 
-{
-    //pc.printf("CallBack %s : %s\n",key, value);
-
-    if(strstr(value,"modeoff")!=NULL)
-    {
-        pc.printf("CallBack modeOFF\n\r");
-        modeManager.setMode(OFF);
-        modeManager.setModeJustChanged(true); 
-    }
-    else if(strstr(value,"modeauto")!=NULL)
-    {
-        pc.printf("CallBack modeAUTO\n\r"); 
-        modeManager.setMode(AUTO);
-        modeManager.setModeJustChanged(true); 
-    }
-    else if(strstr(value,"modeon")!=NULL)
-    {
-        pc.printf("CallBack modeON\n\r"); 
-        modeManager.setMode(ON);
-        modeManager.setModeJustChanged(true); 
-    }
-}
-
-void startKompel()
-{
-    /*dresetKompel = 1;
-    wait(2);
-    dresetKompel = 0;*/
-    dstartKompel = 1;
-    wait(5);
-    dstartKompel = 0;       
-}
-
 void blinkPublish()
 {
     int     i;
@@ -202,6 +167,55 @@ void blinkPublish()
     } 
 }
 
+// Extract TicketId from the mqtt message
+char* getTicketId(char* ticketId, const char* message)
+{
+    const char* startUid = strstr(message + 5, "\"");
+    ticketId = strncpy(ticketId, startUid + 1, 32);
+    ticketId[32]='\0';
+    return ticketId;
+}
+
+//Callback function that is called when a command is received
+void callback(MQTTClient* client, const char *topic, const char *message) 
+{
+    //pc.printf("CallBack %s : %s\n",topic, message);
+
+    char id[33];
+    getTicketId(id, message);
+    pc.printf("id: %s\n\r", id);
+    if(strstr(message,"modeoff")!=NULL)
+    {
+        pc.printf("CallBack modeOFF\n\r");
+        modeManager.setMode(OFF);
+        modeManager.setModeJustChanged(true); 
+    }
+    else if(strstr(message,"modeauto")!=NULL)
+    {
+        pc.printf("CallBack modeAUTO\n\r"); 
+        modeManager.setMode(AUTO);
+        modeManager.setModeJustChanged(true); 
+    }
+    else if(strstr(message,"modeon")!=NULL)
+    {
+        pc.printf("CallBack modeON\n\r"); 
+        modeManager.setMode(ON);
+        modeManager.setModeJustChanged(true); 
+    }
+    // Acknowledge and blinck led to show user the ack.
+    client->ack(id);
+    blinkPublish();
+}
+
+void startKompel()
+{
+    /*dresetKompel = 1;
+    wait(2);
+    dresetKompel = 0;*/
+    dstartKompel = 1;
+    wait(5);
+    dstartKompel = 0;       
+}
 
 int main() 
 {
@@ -348,7 +362,7 @@ int main()
         //If no more connected, try to reconnect.
         else
         { 
-            pc.printf("Deconnected\n"); 
+            pc.printf("Disconnected\n"); 
             //Green Light OFF
             dout1=0;
             client.reconnect();

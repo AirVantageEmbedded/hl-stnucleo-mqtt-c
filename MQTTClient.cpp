@@ -11,9 +11,10 @@
 #include "MQTTPublish.h"
 #include "MQTTPacket.h"
 #include "mbed.h"
+// To debug: send trace on serial but can impact the interface with HL!
+#include "debug.h"
 
-
-MQTTClient::MQTTClient(char *server, void (*callback)(const char *, const char*), char *password,int port, Serial* pc, char* apn):
+MQTTClient::MQTTClient(char *server, void (*callback)(MQTTClient*,const char *, const char*), char *password,int port, Serial* pc, char* apn):
 _server(server),callback(callback),_password(password),_port(port),_pc(pc),_apn(apn)
 {
        
@@ -35,7 +36,13 @@ _server(server),callback(callback),_password(password),_port(port),_pc(pc),_apn(
     //index of the RX buffer(where all the data received from the Kompel card is stocked)
     rx_in = 0;
 
-    init();
+    int success = 0;
+    do
+    {
+        success = init();
+        wait(1);
+    }
+    while(success < 0);
 }
 
 MQTTClient::~MQTTClient()
@@ -112,8 +119,8 @@ bool MQTTClient::getIMEI()
            _id[length]='\0';
            _username[length]='\0';
            
-           _pc->printf("IMEI: %s\r\n",_id); 
-           _pc->printf("IMEI: %s\r\n",_username); 
+           //_pc->printf("IMEI: %s\r\n",_id); 
+           //_pc->printf("IMEI: %s\r\n",_username); 
            
            ret = true;
         
@@ -133,7 +140,7 @@ bool MQTTClient::connectionOK()
     
     pch = strstr(&rx_buffer[0],"+KTCP_IND: 1,1");
     
-    _pc->printf("Connection OK %d\n\r", pch);
+    //_pc->printf("Connection OK %d\n\r", pch);
     
     if(pch != NULL)
     {
@@ -260,10 +267,9 @@ int MQTTClient::init()
     _pc->printf("AT+CPIN?\r\n");
      
     if(isResponseExpected("+CPIN: READY",1))
-    {
-       _pc->printf("CPIN OK\r\n"); 
-    }
-    
+       { // RJA_pc->printf("CPIN OK\r\n");
+       }
+       
     //Destect if it's a HL6 or HL8
     _pc->printf("ATI3\r\n");
     
@@ -314,20 +320,35 @@ int MQTTClient::init()
     }
     
     wait(1);
-    
-    //Launch the TCP connection
-    _pc->printf("AT+KTCPCNX=1\r\n");
-    
-    wait(5);
-    
+
+    int tries = 0;
     do
     {
-        ret = connectionOK();
-        
-        wait(1);  
-    }
-    while(ret == false && HL8 == true);
+        //Launch the TCP connection
+        _pc->printf("AT+KTCPCNX=1\r\n");
     
+        wait(5);
+    
+        // Wait 5s to received the ack, otherwise try to relaunch the TCP connection
+        int i = 0;
+        do
+        {
+            ret = connectionOK();
+            wait(1);
+            i++;
+        }
+        while(i < 5 && ret == false);
+        tries++;
+    }
+    while((ret == false && HL8 == true) && tries < 5);
+    
+    // We tries 5 TCP connections, all failed, have to init from begining.
+    if(ret == false)
+    {
+        debug("RESTART\r\n");
+        return -1;
+    }
+
     //Start the timer for the ping
     timer.start();
     
@@ -343,7 +364,7 @@ void MQTTClient::cleanTCPData(char* pch,int size)
     memset(pch-sizeOfPatternConnect,0,sizeOfPatternConnect+size+sizeOfPatternEOF);
 }
 
-//Send the CONNECT message in MQTT to the server 
+//Send the CONNECT message in MQTT to the server
 int MQTTClient::connect() 
 {   
     int     ret = 0;
@@ -358,7 +379,7 @@ int MQTTClient::connect()
     options.keepAliveInterval = 30;
     options.willFlag = 0;
     
-    int     size = MQTTSerialize_connect(mqtt_buffer, 65536, &options);     
+    int     size = MQTTSerialize_connect(mqtt_buffer, 65536, &options);
     
     writeTCPData(size);
         
@@ -376,29 +397,13 @@ int MQTTClient::connect()
 //Send TCP Data
 int MQTTClient::writeTCPData(int sizeOfData)
 {
-    int     totalLength = 0;
-    int     i;
-    
-    // Must add this pattern (i.e. "\r\n\r\n") to each packet sent 
-    mqtt_buffer[sizeOfData]='\\';
-    mqtt_buffer[sizeOfData+1]='r';
-    mqtt_buffer[sizeOfData+2]='\\';
-    mqtt_buffer[sizeOfData+3]='n';
-    mqtt_buffer[sizeOfData+4]='\\';
-    mqtt_buffer[sizeOfData+5]='r';
-    mqtt_buffer[sizeOfData+6]='\\';
-    mqtt_buffer[sizeOfData+7]='n';
-    
-    //Calculate the total size of Data to be sent    
-    totalLength = sizeOfData + strlen("\r\n\r\n");
-    
-    // Send the command to allow the transmission   
-    _pc->printf("AT+KTCPSND=1,%d\r\n",totalLength);
+    // Send the command to allow the transmission
+    _pc->printf("AT+KTCPSND=1,%d\r\n",sizeOfData);
     
     // Temporisation are needed for sending data
     wait(2);
-    
-    for( i = 0 ; i < totalLength; i++)
+    int  i;
+    for( i = 0 ; i < sizeOfData; i++)
     {
         _pc->putc(mqtt_buffer[i]);
     }
@@ -406,37 +411,9 @@ int MQTTClient::writeTCPData(int sizeOfData)
     //Once all the data are sent, add this pattern to finish the transmission
     _pc->printf("--EOF--Pattern--");
     
-    wait(1); 
+    wait(1);
     
-    return totalLength;  
-}
-
-//Publish just one information the the server with timestamp
-int MQTTClient::pub(char *key, char *value)
-{
-    MQTTString  channel = MQTTString_initializer;
-    channel.lenstring.len = 0;
-    //allocate 15 bytes for the deviceId + 15 bytes for the rest of the path i.e. "/messages/json"
-    char        channelName[30];
-    channel.cstring = (char*)&channelName;
-    sprintf(channel.cstring, "%s/messages/json",_id);
-      
-    int         key_length = strlen(key);
-    int         value_length = strlen(value);
-    char        payload[key_length + value_length + 36];
-    
-    //this timestamp is just for the example 
-    strcpy(payload, "{\"1349907137000\": { \"");
-    strcat(payload, key); 
-    strcat(payload, "\":");   
-    strcat(payload, value);   
-    strcat(payload, "}}");
-    
-    int         length = MQTTSerialize_publish(mqtt_buffer, 65536, 0, 0, 0, 0, channel, (unsigned char*)payload, (unsigned)strlen(payload));    
-        
-    writeTCPData(length);
-
-    return 0;
+    return sizeOfData;
 }
 
 //This function is used to publish 4 differents values in the same time. No timestamp.
@@ -448,7 +425,7 @@ int MQTTClient::pub(char *key1, char *value1,char *key2, char *value2,char *key3
     char channelName[30];
     channel.cstring = (char*)&channelName;
     sprintf(channel.cstring, "%s/messages/json",_id);
-      
+    
     int key_length1 = strlen(key1);
     int value_length1 = strlen(value1);
     int key_length2 = strlen(key2);
@@ -477,7 +454,30 @@ int MQTTClient::pub(char *key1, char *value1,char *key2, char *value2,char *key3
     strcat(payload, "}");
     
     int length = MQTTSerialize_publish(mqtt_buffer, 65536, 0, 0, 0, 0, channel, (unsigned char*)payload, (unsigned)strlen(payload));    
+    
+    writeTCPData(length);
+    return 0;
+}
 
+//Publish just one variable to the server with timestamp
+int MQTTClient::ack(char *ticketId)
+{
+    MQTTString  channel = MQTTString_initializer;
+    channel.lenstring.len = 0;
+    //allocate 15 bytes for the deviceId + 11 bytes for the rest of the path i.e. "/acks/json"
+    char        channelName[26];
+    channel.cstring = (char*)&channelName;
+    sprintf(channel.cstring, "%s/acks/json",_id);
+      
+    int         key_length = strlen(ticketId);
+    char        payload[key_length + 30];
+
+    strcpy(payload, "[{\"uid\": \"");
+    strcat(payload, ticketId);
+    strcat(payload, "\", \"status\" : \"OK\"}]");
+    
+    int         length = MQTTSerialize_publish(mqtt_buffer, 65536, 0, 0, 0, 0, channel, (unsigned char*)payload, (unsigned)strlen(payload));    
+        
     writeTCPData(length);
 
     return 0;
@@ -487,7 +487,7 @@ int MQTTClient::pub(char *key1, char *value1,char *key2, char *value2,char *key3
 void MQTTClient::decodTCPData(int type, int sizeOfData)
 {
     char*   pch;
-    char*   pchUid;
+    char*   message;
 
     //Search the "CONNECT" pattern in the RX buffer
     pch = strstr(&rx_buffer[0],"CONNECT");
@@ -501,7 +501,7 @@ void MQTTClient::decodTCPData(int type, int sizeOfData)
         //CONNACK
         if(type == CONNACK_MSG)
         {
-            _pc->printf("CONNACK with return %d\n\r",msgReceiv[1]);//return the error code from the server.
+            //_pc->printf("CONNACK with return %d\n\r",msgReceiv[1]);//return the error code from the server.
             
             if(msgReceiv[1]==0)
             {
@@ -509,32 +509,32 @@ void MQTTClient::decodTCPData(int type, int sizeOfData)
             }  
             else
             {          
-                _pc->printf("Problem with the server\n\r");
+                //_pc->printf("Problem with the server\n\r");
             }
             
         }
         //PINGRESP
         else if(type == PINGRESP_MSG)
         {
-            _pc->printf("PINGRESP\n\r");  
+            //_pc->printf("PINGRESP\n\r");  
             pingCounter-=1;   
         }
         //PUBACK 
         else if(type == PUBACK_MSG)
         {
-            _pc->printf("PUBACK\n\r");       
+            //_pc->printf("PUBACK\n\r");       
         }
         //PUBLISH
         else if(type == PUBLISH_MSG)
         {
-            _pc->printf("PUBLISH mesg\n\r"); 
+            //_pc->printf("PUBLISH mesg\n\r"); 
             
-            pchUid = strstr(&msgReceiv[6],"uid");
+            message = strstr(&msgReceiv[6],"uid");
             
-           if(pchUid!=NULL)
+           if(message!=NULL)
            {
                 //send the message received to the application to decode the command(i.e. mode AUTO, mode OFF, mode ON)
-                call_callback(_username, pchUid);
+                call_callback(_username, message);
            }
                  
         }
@@ -715,5 +715,5 @@ void MQTTClient::reconnect()
 
 void MQTTClient::call_callback(const char *topic, const char *message) 
 {
-    callback(topic, message);
+    callback(this, topic, message);
 }

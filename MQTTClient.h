@@ -30,8 +30,8 @@ class MQTTClient {
          * \param pc pointer of the Serail object for transmitting and receiving data
          * \param apn APN of the SIM card
          */
-        MQTTClient(char *server,void (*callback)(const char *, const char*));
-        MQTTClient(char *server, void (*callback)(const char *, const char*), char *password, int port, Serial* pc, char* apn);
+        MQTTClient(char *server,void (*callback)(MQTTClient*, const char *, const char*));
+        MQTTClient(char *server, void (*callback)(MQTTClient*, const char *, const char*), char *password, int port, Serial* pc, char* apn);
         void            reconnect();
         virtual         ~MQTTClient();
 
@@ -43,6 +43,8 @@ class MQTTClient {
         /*publish for four values*/
         int             pub(char *key1, char *value1,char *key2, char *value2,char *key3, char *value3, char *key4, char *value4);
 
+        /* Acknowledge a command */
+        int             ack(char* ticketId);
         
         void            loop();
         
@@ -56,7 +58,7 @@ class MQTTClient {
         char*           _server;
         int             _port;
         char            _id[16];
-        void            (*callback)(const char *, const char*);
+        void            (*callback)(MQTTClient*, const char *, const char*);
         char            _username[16];
         char*           _password;
         char*           _topic;
